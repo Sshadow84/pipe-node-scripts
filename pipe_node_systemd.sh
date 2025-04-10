@@ -85,9 +85,9 @@ function install_and_setup_node() {
     # Регистрация
     read -p "Введите реферальный код (или Enter для пропуска): " REF_CODE
     if [ -n "$REF_CODE" ]; then
-        sudo $POP_PATH --signup-by-referral-route "$REF_CODE" || { echo -e "${CLR_ERROR}Ошибка регистрации${CLR_RESET}"; return 1; }
+        sudo $POP_PATH --signup-by-referral-route "$REF_CODE" || echo -e "${CLR_WARNING}⚠ Ошибка регистрации, продолжаем без реферального кода${CLR_RESET}"
     fi
-    echo -e "${CLR_SUCCESS}✅ Регистрация ноды завершена!${CLR_RESET}"
+    echo -e "${CLR_SUCCESS}✅ Настройка ноды завершена!${CLR_RESET}"
 
     # Создание службы
     sudo tee /etc/systemd/system/$SERVICE_NAME > /dev/null <<EOF
@@ -101,6 +101,7 @@ Restart=always
 RestartSec=5
 User=$USER
 LimitNOFILE=65535
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target
@@ -112,23 +113,37 @@ EOF
     # Запуск службы с проверкой портов
     echo -e "${CLR_INFO}▶ Запуск службы...${CLR_RESET}"
     sudo systemctl start $SERVICE_NAME || { echo -e "${CLR_ERROR}Ошибка запуска службы${CLR_RESET}"; return 1; }
-    sleep 10
+    sleep 30
 
     # Проверка портов
     echo -e "${CLR_INFO}▶ Проверка портов 80, 443, 8003...${CLR_RESET}"
-    if ! sudo ss -tuln | grep -qE '80.*LISTEN|443.*LISTEN|8003.*LISTEN'; then
-        echo -e "${CLR_WARNING}⚠ Порты не активны, перезапуск службы...${CLR_RESET}"
+    sudo ss -tuln | grep -E '80|443|8003' || echo -e "${CLR_WARNING}⚠ Порты не найдены в списке активных${CLR_RESET}"
+    if sudo ss -tuln | grep -q '8003.*LISTEN'; then
+        echo -e "${CLR_SUCCESS}✅ Порт 8003 активен! Нода запущена.${CLR_RESET}"
+        if ! sudo ss -tuln | grep -qE '80.*LISTEN|443.*LISTEN'; then
+            echo -e "${CLR_WARNING}⚠ Порты 80 и 443 не активны. Возможно, флаг --enable-80-443 не работает или требует внешнего подключения.${CLR_RESET}"
+        fi
+        if sudo journalctl -u $SERVICE_NAME -n 20 | grep -q "No UPnP-enabled router found"; then
+            echo -e "${CLR_WARNING}⚠ Требуется ручной проброс порта 8003. Инструкции:${CLR_RESET}"
+            echo -e "  1. Войдите в настройки роутера или панель управления сервером."
+            echo -e "  2. Настройте проброс: Внешний порт 8003 → Внутренний порт 8003, TCP."
+            echo -e "  3. Опционально: добавьте порты 80 и 443."
+        fi
+    else
+        echo -e "${CLR_WARNING}⚠ Порт 8003 не активен, перезапуск службы...${CLR_RESET}"
         sudo systemctl stop $SERVICE_NAME
         free_ports
         sudo systemctl start $SERVICE_NAME
-        sleep 10
-        if ! sudo ss -tuln | grep -qE '80.*LISTEN|443.*LISTEN|8003.*LISTEN'; then
-            echo -e "${CLR_ERROR}Ошибка: порты 80, 443 или 8003 не слушаются! Логи службы:${CLR_RESET}"
+        sleep 30
+        sudo ss -tuln | grep -E '80|443|8003' || echo -e "${CLR_WARNING}⚠ Порты не найдены в списке активных${CLR_RESET}"
+        if sudo ss -tuln | grep -q '8003.*LISTEN'; then
+            echo -e "${CLR_SUCCESS}✅ Порт 8003 активен! Нода запущена.${CLR_RESET}"
+        else
+            echo -e "${CLR_ERROR}Ошибка: порт 8003 не слушается! Логи службы:${CLR_RESET}"
             sudo journalctl -u $SERVICE_NAME -n 20
             return 1
         fi
     fi
-    echo -e "${CLR_SUCCESS}✅ Все порты (80, 443, 8003) активны! Нода запущена.${CLR_RESET}"
 }
 
 # Проверка статуса ноды
@@ -197,6 +212,7 @@ Restart=always
 RestartSec=5
 User=$USER
 LimitNOFILE=65535
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target
@@ -206,23 +222,37 @@ EOF
     sudo systemctl daemon-reload
     sudo systemctl enable $SERVICE_NAME
     sudo systemctl start $SERVICE_NAME
-    sleep 10
+    sleep 30
 
     # Проверка портов
     echo -e "${CLR_INFO}▶ Проверка портов 80, 443, 8003...${CLR_RESET}"
-    if ! sudo ss -tuln | grep -qE '80.*LISTEN|443.*LISTEN|8003.*LISTEN'; then
-        echo -e "${CLR_WARNING}⚠ Порты не активны, повторный перезапуск...${CLR_RESET}"
+    sudo ss -tuln | grep -E '80|443|8003' || echo -e "${CLR_WARNING}⚠ Порты не найдены в списке активных${CLR_RESET}"
+    if sudo ss -tuln | grep -q '8003.*LISTEN'; then
+        echo -e "${CLR_SUCCESS}✅ Порт 8003 активен! Нода запущена.${CLR_RESET}"
+        if ! sudo ss -tuln | grep -qE '80.*LISTEN|443.*LISTEN'; then
+            echo -e "${CLR_WARNING}⚠ Порты 80 и 443 не активны. Возможно, флаг --enable-80-443 не работает или требует внешнего подключения.${CLR_RESET}"
+        fi
+        if sudo journalctl -u $SERVICE_NAME -n 20 | grep -q "No UPnP-enabled router found"; then
+            echo -e "${CLR_WARNING}⚠ Требуется ручной проброс порта 8003. Инструкции:${CLR_RESET}"
+            echo -e "  1. Войдите в настройки роутера или панель управления сервером."
+            echo -e "  2. Настройте проброс: Внешний порт 8003 → Внутренний порт 8003, TCP."
+            echo -e "  3. Опционально: добавьте порты 80 и 443."
+        fi
+    else
+        echo -e "${CLR_WARNING}⚠ Порт 8003 не активен, повторный перезапуск...${CLR_RESET}"
         sudo systemctl stop $SERVICE_NAME
         free_ports
         sudo systemctl start $SERVICE_NAME
-        sleep 10
-        if ! sudo ss -tuln | grep -qE '80.*LISTEN|443.*LISTEN|8003.*LISTEN'; then
-            echo -e "${CLR_ERROR}Ошибка: порты 80, 443 или 8003 не слушаются! Логи службы:${CLR_RESET}"
+        sleep 30
+        sudo ss -tuln | grep -E '80|443|8003' || echo -e "${CLR_WARNING}⚠ Порты не найдены в списке активных${CLR_RESET}"
+        if sudo ss -tuln | grep -q '8003.*LISTEN'; then
+            echo -e "${CLR_SUCCESS}✅ Порт 8003 активен! Нода запущена.${CLR_RESET}"
+        else
+            echo -e "${CLR_ERROR}Ошибка: порт 8003 не слушается! Логи службы:${CLR_RESET}"
             sudo journalctl -u $SERVICE_NAME -n 20
             return 1
         fi
     fi
-    echo -e "${CLR_SUCCESS}✅ Порты обновлены, все порты (80, 443, 8003) активны!${CLR_RESET}"
 }
 
 # Удаление ноды и её файлов
@@ -258,31 +288,4 @@ function check_resources() {
 # Главное меню
 function show_menu() {
     show_logo
-    echo -e "${CLR_GREEN}1) 🚀 Установить и запустить ноду${CLR_RESET}"
-    echo -e "${CLR_GREEN}2) 📊 Проверить статус ноды${CLR_RESET}"
-    echo -e "${CLR_GREEN}3) 💰 Проверить поинты${CLR_RESET}"
-    echo -e "${CLR_GREEN}4) 🌐 Сгенерировать реферальный код${CLR_RESET}"
-    echo -e "${CLR_GREEN}5) 💾 Создать копию node_info.json${CLR_RESET}"
-    echo -e "${CLR_GREEN}6) 🔄 Обновить порты${CLR_RESET}"
-    echo -e "${CLR_GREEN}7) 🗑️ Удалить ноду${CLR_RESET}"
-    echo -e "${CLR_GREEN}8) 📈 Проверить параметры RAM и DISK${CLR_RESET}"
-    echo -e "${CLR_GREEN}9) ❌ Выйти${CLR_RESET}"
-    echo -e "${CLR_INFO}Введите номер действия:${CLR_RESET}"
-    read -r choice
-
-    case $choice in
-        1) install_dependencies && install_and_setup_node ;;
-        2) check_status ;;
-        3) check_points ;;
-        4) generate_referral ;;
-        5) backup_node_info ;;
-        6) refresh_ports ;;
-        7) remove_node ;;
-        8) check_resources ;;
-        9) echo -e "${CLR_ERROR}Выход...${CLR_RESET}" ;;
-        *) echo -e "${CLR_WARNING}Неверный выбор. Попробуйте снова.${CLR_RESET}" && show_menu ;;
-    esac
-}
-
-# Запуск меню
-show_menu
+    echo -e "${CLR_GREEN}1) 🚀 Установить и запустить ноду${CLR_RESET
