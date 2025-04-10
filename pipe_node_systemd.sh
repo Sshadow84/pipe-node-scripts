@@ -35,6 +35,19 @@ function install_dependencies() {
     echo -e "${CLR_SUCCESS}✅ Зависимости установлены!${CLR_RESET}"
 }
 
+# Проверка и освобождение портов
+function free_ports() {
+    echo -e "${CLR_INFO}▶ Освобождаем порты 80, 443, 8003...${CLR_RESET}"
+    for port in 80 443 8003; do
+        if sudo lsof -i :$port > /dev/null 2>&1; then
+            sudo lsof -i :$port | awk 'NR>1 {print $2}' | xargs -r sudo kill -9
+            echo -e "${CLR_SUCCESS}Порт $port очищен${CLR_RESET}"
+        else
+            echo -e "${CLR_INFO}Порт $port уже свободен${CLR_RESET}"
+        fi
+    done
+}
+
 # Установка, регистрация и запуск ноды Pipe
 function install_and_setup_node() {
     echo -e "${CLR_INFO}▶ Установка и настройка ноды Pipe...${CLR_RESET}"
@@ -43,9 +56,7 @@ function install_and_setup_node() {
 
     # Очистка старого pop и портов
     sudo rm -f $POP_PATH
-    for port in 80 443 8003; do
-        sudo lsof -i :$port | awk 'NR>1 {print $2}' | xargs -r sudo kill -9
-    done
+    free_ports
 
     # Скачивание и настройка pop v0.2.8
     sudo curl -L -o $POP_PATH https://dl.pipecdn.app/v0.2.8/pop || { echo -e "${CLR_ERROR}Ошибка скачивания pop${CLR_RESET}"; exit 1; }
@@ -61,9 +72,9 @@ function install_and_setup_node() {
 
     # Запрос параметров с проверкой
     read -p "Введите RAM для ноды (в ГБ, например, 4): " RAM
-    [ -z "$RAM" ] && RAM=4  # Значение по умолчанию, если пусто
+    [ -z "$RAM" ] && RAM=4
     read -p "Введите макс. объём диска (в ГБ, например, 100): " DISK
-    [ -z "$DISK" ] && DISK=100  # Значение по умолчанию, если пусто
+    [ -z "$DISK" ] && DISK=100
     read -p "Введите ваш Solana кошелёк (pubKey): " WALLET_KEY
     [ -z "$WALLET_KEY" ] && { echo -e "${CLR_ERROR}Ошибка: кошелёк обязателен${CLR_RESET}"; return 1; }
     echo "RAM=$RAM" > "$CONFIG_FILE"
@@ -78,7 +89,7 @@ function install_and_setup_node() {
     fi
     echo -e "${CLR_SUCCESS}✅ Регистрация ноды завершена!${CLR_RESET}"
 
-    # Создание службы с явной подстановкой переменных
+    # Создание службы
     sudo tee /etc/systemd/system/$SERVICE_NAME > /dev/null <<EOF
 [Unit]
 Description=Pipe Network Node
@@ -97,18 +108,27 @@ EOF
 
     sudo systemctl daemon-reload
     sudo systemctl enable $SERVICE_NAME
+
+    # Запуск службы с проверкой портов
+    echo -e "${CLR_INFO}▶ Запуск службы...${CLR_RESET}"
     sudo systemctl start $SERVICE_NAME || { echo -e "${CLR_ERROR}Ошибка запуска службы${CLR_RESET}"; return 1; }
-    echo -e "${CLR_SUCCESS}✅ Нода Pipe запущена через systemd!${CLR_RESET}"
+    sleep 10
 
     # Проверка портов
-    sleep 5
     echo -e "${CLR_INFO}▶ Проверка портов 80, 443, 8003...${CLR_RESET}"
     if ! sudo ss -tuln | grep -qE '80.*LISTEN|443.*LISTEN|8003.*LISTEN'; then
-        echo -e "${CLR_ERROR}Ошибка: порты 80, 443 или 8003 не слушаются!${CLR_RESET}"
-        sudo journalctl -u $SERVICE_NAME -n 20
-    else
-        echo -e "${CLR_SUCCESS}✅ Все порты (80, 443, 8003) активны!${CLR_RESET}"
+        echo -e "${CLR_WARNING}⚠ Порты не активны, перезапуск службы...${CLR_RESET}"
+        sudo systemctl stop $SERVICE_NAME
+        free_ports
+        sudo systemctl start $SERVICE_NAME
+        sleep 10
+        if ! sudo ss -tuln | grep -qE '80.*LISTEN|443.*LISTEN|8003.*LISTEN'; then
+            echo -e "${CLR_ERROR}Ошибка: порты 80, 443 или 8003 не слушаются! Логи службы:${CLR_RESET}"
+            sudo journalctl -u $SERVICE_NAME -n 20
+            return 1
+        fi
     fi
+    echo -e "${CLR_SUCCESS}✅ Все порты (80, 443, 8003) активны! Нода запущена.${CLR_RESET}"
 }
 
 # Проверка статуса ноды
@@ -139,21 +159,70 @@ function backup_node_info() {
     fi
 }
 
-# Обновление ноды до последней версии
-function update_node() {
-    echo -e "${CLR_INFO}▶ Проверка обновлений...${CLR_RESET}"
-    CURRENT_VERSION=$(curl -s https://dl.pipecdn.app/v0.2.8/pop --head | grep -i location | awk '{print $2}')
-    echo -e "${CLR_INFO}▶ Текущая версия: v0.2.8, доступная: $CURRENT_VERSION${CLR_RESET}"
-    read -p "Обновить ноду? (y/n): " UPDATE_CONFIRM
-    if [[ "$UPDATE_CONFIRM" == "y" ]]; then
-        sudo systemctl stop $SERVICE_NAME
-        cd $HOME/pipe
-        sudo curl -L -o $POP_PATH "$CURRENT_VERSION" || { echo -e "${CLR_ERROR}Ошибка обновления${CLR_RESET}"; return 1; }
-        sudo chmod +x $POP_PATH
-        sudo setcap 'cap_net_bind_service=+ep' $POP_PATH
-        sudo systemctl start $SERVICE_NAME
-        echo -e "${CLR_SUCCESS}✅ Нода обновлена и перезапущена!${CLR_RESET}"
+# Обновление портов и службы
+function refresh_ports() {
+    echo -e "${CLR_INFO}▶ Обновление портов и службы...${CLR_RESET}"
+    # Остановка и удаление старой службы
+    sudo systemctl stop $SERVICE_NAME
+    sudo rm -f /etc/systemd/system/$SERVICE_NAME
+    sudo systemctl daemon-reload
+
+    # Переустановка pop
+    echo -e "${CLR_INFO}▶ Переустановка pop v0.2.8...${CLR_RESET}"
+    sudo rm -f $POP_PATH
+    sudo curl -L -o $POP_PATH https://dl.pipecdn.app/v0.2.8/pop || { echo -e "${CLR_ERROR}Ошибка скачивания pop${CLR_RESET}"; return 1; }
+    sudo chmod +x $POP_PATH
+    sudo setcap 'cap_net_bind_service=+ep' $POP_PATH
+
+    # Очистка портов
+    free_ports
+
+    # Проверка наличия конфигурации
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${CLR_ERROR}Ошибка: файл конфигурации $CONFIG_FILE не найден! Установите ноду через пункт 1.${CLR_RESET}"
+        return 1
     fi
+    source "$CONFIG_FILE"
+
+    # Пересоздание службы
+    echo -e "${CLR_INFO}▶ Создание новой службы...${CLR_RESET}"
+    sudo tee /etc/systemd/system/$SERVICE_NAME > /dev/null <<EOF
+[Unit]
+Description=Pipe Network Node
+After=network.target
+
+[Service]
+ExecStart=$POP_PATH --ram $RAM --max-disk $DISK --cache-dir $HOME/pipe/pipe_cache --pubKey "$WALLET_KEY" --enable-80-443
+Restart=always
+RestartSec=5
+User=$USER
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Запуск службы
+    sudo systemctl daemon-reload
+    sudo systemctl enable $SERVICE_NAME
+    sudo systemctl start $SERVICE_NAME
+    sleep 10
+
+    # Проверка портов
+    echo -e "${CLR_INFO}▶ Проверка портов 80, 443, 8003...${CLR_RESET}"
+    if ! sudo ss -tuln | grep -qE '80.*LISTEN|443.*LISTEN|8003.*LISTEN'; then
+        echo -e "${CLR_WARNING}⚠ Порты не активны, повторный перезапуск...${CLR_RESET}"
+        sudo systemctl stop $SERVICE_NAME
+        free_ports
+        sudo systemctl start $SERVICE_NAME
+        sleep 10
+        if ! sudo ss -tuln | grep -qE '80.*LISTEN|443.*LISTEN|8003.*LISTEN'; then
+            echo -e "${CLR_ERROR}Ошибка: порты 80, 443 или 8003 не слушаются! Логи службы:${CLR_RESET}"
+            sudo journalctl -u $SERVICE_NAME -n 20
+            return 1
+        fi
+    fi
+    echo -e "${CLR_SUCCESS}✅ Порты обновлены, все порты (80, 443, 8003) активны!${CLR_RESET}"
 }
 
 # Удаление ноды и её файлов
@@ -186,7 +255,7 @@ function check_resources() {
     fi
 }
 
-# Главное меню на русском с логической последовательностью
+# Главное меню
 function show_menu() {
     show_logo
     echo -e "${CLR_GREEN}1) 🚀 Установить и запустить ноду${CLR_RESET}"
@@ -194,7 +263,7 @@ function show_menu() {
     echo -e "${CLR_GREEN}3) 💰 Проверить поинты${CLR_RESET}"
     echo -e "${CLR_GREEN}4) 🌐 Сгенерировать реферальный код${CLR_RESET}"
     echo -e "${CLR_GREEN}5) 💾 Создать копию node_info.json${CLR_RESET}"
-    echo -e "${CLR_GREEN}6) 🔄 Обновить ноду${CLR_RESET}"
+    echo -e "${CLR_GREEN}6) 🔄 Обновить порты${CLR_RESET}"
     echo -e "${CLR_GREEN}7) 🗑️ Удалить ноду${CLR_RESET}"
     echo -e "${CLR_GREEN}8) 📈 Проверить параметры RAM и DISK${CLR_RESET}"
     echo -e "${CLR_GREEN}9) ❌ Выйти${CLR_RESET}"
@@ -207,7 +276,7 @@ function show_menu() {
         3) check_points ;;
         4) generate_referral ;;
         5) backup_node_info ;;
-        6) update_node ;;
+        6) refresh_ports ;;
         7) remove_node ;;
         8) check_resources ;;
         9) echo -e "${CLR_ERROR}Выход...${CLR_RESET}" ;;
