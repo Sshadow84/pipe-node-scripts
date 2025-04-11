@@ -72,9 +72,9 @@ function install_and_setup_node() {
 
     # Запрос параметров с проверкой
     read -p "Введите RAM для ноды (в ГБ, например, 4): " RAM
-    [ -z "$RAM" ] && RAM=4
+    [ -z "$RAM" ] && RAM=4  # Значение по умолчанию, если пусто
     read -p "Введите макс. объём диска (в ГБ, например, 100): " DISK
-    [ -z "$DISK" ] && DISK=100
+    [ -z "$DISK" ] && DISK=100  # Значение по умолчанию, если пусто
     read -p "Введите ваш Solana кошелёк (pubKey): " WALLET_KEY
     [ -z "$WALLET_KEY" ] && { echo -e "${CLR_ERROR}Ошибка: кошелёк обязателен${CLR_RESET}"; return 1; }
     echo "RAM=$RAM" > "$CONFIG_FILE"
@@ -288,4 +288,31 @@ function check_resources() {
 # Главное меню
 function show_menu() {
     show_logo
-    echo -e "${CLR_GREEN}1) 🚀 Установить и запустить ноду${CLR_RESET
+    echo -e "${CLR_GREEN}1) 🚀 Установить и запустить ноду${CLR_RESET}"
+    echo -e "${CLR_GREEN}2) 📊 Проверить статус ноды${CLR_RESET}"
+    echo -e "${CLR_GREEN}3) 💰 Проверить поинты${CLR_RESET}"
+    echo -e "${CLR_GREEN}4) 🌐 Сгенерировать реферальный код${CLR_RESET}"
+    echo -e "${CLR_GREEN}5) 💾 Создать копию node_info.json${CLR_RESET}"
+    echo -e "${CLR_GREEN}6) 🔄 Обновить порты и службу${CLR_RESET}"
+    echo -e "${CLR_GREEN}7) 🗑️ Удалить ноду${CLR_RESET}"
+    echo -e "${CLR_GREEN}8) 📈 Проверить параметры RAM и DISK${CLR_RESET}"
+    echo -e "${CLR_GREEN}9) ❌ Выйти${CLR_RESET}"
+    echo -e "${CLR_INFO}Введите номер действия:${CLR_RESET}"
+    read -r choice
+
+    case $choice in
+        1) install_dependencies && install_and_setup_node ;;
+        2) check_status ;;
+        3) check_points ;;
+        4) generate_referral ;;
+        5) backup_node_info ;;
+        6) refresh_ports ;;
+        7) remove_node ;;
+        8) check_resources ;;
+        9) echo -e "${CLR_ERROR}Выход...${CLR_RESET}" ;;
+        *) echo -e "${CLR_WARNING}Неверный выбор. Попробуйте снова.${CLR_RESET}" && show_menu ;;
+    esac
+}
+
+# Запуск меню
+show_menu
